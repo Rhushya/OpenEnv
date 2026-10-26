@@ -183,6 +183,8 @@ class EmailTriageEnvironment(
 
     def __init__(self, difficulty: Difficulty = "medium") -> None:
         super().__init__()
+        self._rng = random.Random()
+        self._done = False
         self._difficulty: Difficulty = difficulty if difficulty in TASK_CONFIG else "medium"
         self._task_id: TaskId = self._difficulty
         self._current_email: Dict[str, Any] = {}
@@ -235,7 +237,7 @@ class EmailTriageEnvironment(
         candidates = [e for e in self._emails if e.get("difficulty") == diff_key]
         if not candidates:
             candidates = self._emails
-        return random.choice(candidates)
+        return self._rng.choice(candidates)
 
     # ------------------------------------------------------------------
     # Task / difficulty resolution
@@ -262,13 +264,13 @@ class EmailTriageEnvironment(
         **kwargs: Any,
     ) -> EmailTriageObservation:
         if seed is not None:
-            random.seed(seed)
+            self._rng.seed(seed)
 
         self._task_id = self._resolve_task(**kwargs)
         self._difficulty = TASK_CONFIG[self._task_id]["difficulty"]
 
         # Generate scenario
-        actual_seed = seed if seed is not None else random.randint(0, 2**31)
+        actual_seed = seed if seed is not None else self._rng.randint(0, 2**31)
         scenario = generate_scenario(self._emails, self._difficulty, actual_seed)
 
         self._queue = [slot.email for slot in scenario.tickets]
@@ -346,6 +348,9 @@ class EmailTriageEnvironment(
         timeout_s: Optional[float] = None,
         **kwargs: Any,
     ) -> EmailTriageObservation:
+        if self._done:
+            raise RuntimeError("Episode is done; call reset() before stepping again")
+
         self._state.step_count += 1
 
         if not self._current_email:
@@ -356,6 +361,7 @@ class EmailTriageEnvironment(
 
         # ── Anti-hack: check step timeout ─────────────────────────────
         if self._state.step_count > self._max_episode_steps:
+            self._state.total_reward -= 1.0
             return self._make_observation(
                 reward=-1.0,
                 done=True,
@@ -434,7 +440,6 @@ class EmailTriageEnvironment(
         # ── 3. Check oversight (did coordinator correct specialist?) ─
         reports = self._specialist_reports.get(email_id, {})
         triage_report = reports.get("triage", {})
-        specialist_category = triage_report.get("category")
         specialist_correct = triage_report.get("correct", True)
         true_category = current_email.get("true_category", "other")
         agent_category = action.category
@@ -560,6 +565,7 @@ class EmailTriageEnvironment(
     def _make_observation(
         self, reward: float, done: bool, info: Dict[str, Any]
     ) -> EmailTriageObservation:
+        self._done = done
         body = self._current_email.get("body", "")
         snippet = body[:280]
 
