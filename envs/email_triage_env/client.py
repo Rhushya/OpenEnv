@@ -38,8 +38,8 @@ class EmailTriageEnv(EnvClient[EmailTriageAction, EmailTriageObservation, EmailT
             sender_domain=obs_p["sender_domain"],
             is_internal=obs_p["is_internal"],
             task_id=obs_p["task_id"],
-            reward=obs_p["reward"],
-            done=obs_p["done"],
+            reward=payload.get("reward"),
+            done=bool(payload.get("done", False)),
             metadata=obs_p.get("metadata", {}),
             info=obs_p.get("info"),
         )
