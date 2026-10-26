@@ -7,7 +7,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import requests
 try:
@@ -99,7 +99,14 @@ def _parse_model_action(text: str, subject: str, body: str) -> ParsedAction:
             category = "other"
         priority = int(payload.get("priority", 2))
         priority = max(1, min(5, priority))
-        should_escalate = bool(payload.get("should_escalate", False))
+        should_escalate = payload.get("should_escalate", False)
+        if isinstance(should_escalate, str):
+            value = should_escalate.strip().lower()
+            if value not in {"true", "false"}:
+                raise ValueError("should_escalate must be true or false")
+            should_escalate = value == "true"
+        elif not isinstance(should_escalate, bool):
+            raise ValueError("should_escalate must be a boolean")
         return ParsedAction(category, priority, should_escalate)
     except Exception:
         return _heuristic_action(subject, body)
@@ -299,32 +306,43 @@ def _run_task(base_url: str, client: Optional[OpenAI], task_name: str, seed: int
     reset_result = requests.post(f"{base_url}/reset", json=reset_payload, timeout=15).json()
     obs = reset_result["observation"]
 
-    parsed = _query_model(client, obs["subject"], obs["body_snippet"], obs["sender_domain"], task_name)
-    action = {
-        "action": {
-            "category": parsed.category,
-            "priority": parsed.priority,
-            "should_escalate": parsed.should_escalate,
-        }
-    }
-
     rewards: List[float] = []
     error: Optional[str] = None
-    try:
-        step_result = requests.post(f"{base_url}/step", json=action, timeout=15).json()
-        reward = float(step_result.get("reward") or 0.0)
-        done = bool(step_result.get("done", False))
-    except Exception as exc:
-        reward = 0.0
-        done = True
-        error = str(exc).replace(" ", "_")
+    done = False
+    while not done:
+        parsed = _query_model(
+            client, obs["subject"], obs["body_snippet"], obs["sender_domain"], task_name
+        )
+        action = {
+            "action": {
+                "category": parsed.category,
+                "priority": parsed.priority,
+                "should_escalate": parsed.should_escalate,
+            }
+        }
+        try:
+            response = requests.post(f"{base_url}/step", json=action, timeout=15)
+            response.raise_for_status()
+            step_result = response.json()
+            reward = float(step_result.get("reward") or 0.0)
+            done = step_result["done"]
+            obs = step_result["observation"]
+        except Exception as exc:
+            reward = 0.0
+            done = True
+            error = str(exc).replace(" ", "_")
 
-    rewards.append(reward)
-    action_repr = f"{parsed.category}|{parsed.priority}|{str(parsed.should_escalate).lower()}"
-    log_step(step=1, action=action_repr, reward=reward, done=done, error=error)
+        rewards.append(reward)
+        action_repr = f"{parsed.category}|{parsed.priority}|{str(parsed.should_escalate).lower()}"
+        log_step(step=len(rewards), action=action_repr, reward=reward, done=done, error=error)
 
     score = sum(rewards)
-    log_end(success=score > 0.0, steps=len(rewards), score=score, rewards=rewards)
+    log_end(
+        success=error is None and score > 0.0,
+        steps=len(rewards),
+        score=score,
+        rewards=rewards,
+    )
     return score
 
 

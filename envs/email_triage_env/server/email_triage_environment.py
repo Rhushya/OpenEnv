@@ -381,10 +381,9 @@ class EmailTriageEnvironment(
 
     def _step_single(self, action: EmailTriageAction) -> EmailTriageObservation:
         """Original Round 1 single-step logic — unchanged behaviour."""
-        reward = self._compute_reward_v1(action, self._current_email)
+        reward, task_score = self._compute_reward_v1(action, self._current_email)
         self._state.total_reward += reward
 
-        task_score = task_grader(self._task_id, action, self._current_email)
         info = {
             "task_id": self._task_id,
             "task_description": TASK_CONFIG[self._task_id]["description"],
@@ -603,7 +602,7 @@ class EmailTriageEnvironment(
 
     def _compute_reward_v1(
         self, action: EmailTriageAction, email: Dict[str, Any]
-    ) -> float:
+    ) -> tuple[float, float]:
         """Original Round 1 reward computation — identical to v1 behaviour."""
         cat_score = category_grader(action, email)
         pri_score = priority_grader(action, email)
@@ -616,14 +615,15 @@ class EmailTriageEnvironment(
         reward += weights["escalation"] * esc_score
 
         # Add task-level deterministic score to shape progress.
-        reward += 0.25 * task_grader(self._task_id, action, email)
+        task_score = task_grader(self._task_id, action, email)
+        reward += 0.25 * task_score
 
         if email["true_category"] == "spam" and action.should_escalate:
             reward -= 0.5
         if email["true_category"] == "urgent" and not action.should_escalate:
             reward -= 0.5
 
-        return reward
+        return reward, task_score
 
     # ------------------------------------------------------------------
     # Anti-reward-hacking
